@@ -6,7 +6,6 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - ${APP_HOME}/services/walletdb/data:/var/lib/mysql
       - ${APP_HOME}/services/walletdb/init.d/:/docker-entrypoint-initdb.d/
     restart: always
 

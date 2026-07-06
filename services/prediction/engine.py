@@ -35,6 +35,22 @@ def load_debit_transactions(user_id):
     finally:
         conn.close()
 
+# def load_debit_transactions(user_id):
+#     data = {
+#         'amount': [
+#             120, 150, 170, 160, 180, 140, 200, 220, 210, 190, 230, 240,  # food
+#             130, 160, 180, 170, 150, 160, 140, 130, 120, 150, 160, 170   # transport
+#         ],
+#         'category': [
+#             'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food', 'food',
+#             'transport', 'transport', 'transport', 'transport', 'transport', 'transport',
+#             'transport', 'transport', 'transport', 'transport', 'transport', 'transport'
+#         ],
+#         'timestamp': pd.date_range(start='2023-01-01', periods=24, freq='ME')  # monthly end
+#     }
+#     return pd.DataFrame(data)
+
+
 def prepare_training_data(df):
     df['month'] = df['timestamp'].dt.to_period('M')
     monthly = df.groupby(['month', 'category'])['amount'].sum().reset_index()
@@ -196,6 +212,6 @@ if __name__ == '__main__':
     user_id = 101
     trx_df = load_debit_transactions(user_id)
     train_df = prepare_training_data(trx_df)
-    # train_model(train_df)
+    train_model(train_df)
     
     predict_with_insights(user_id)
