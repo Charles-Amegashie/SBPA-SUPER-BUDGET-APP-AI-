@@ -18,3 +18,7 @@ venv/
 
 # react
 /services/*/web/build
+services/walletdb/data/
+node_modules/
+.env
+services/*/node_modules/
