@@ -266,4 +266,4 @@ router.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
 });
 
-export default router;
+module.exports = router;
