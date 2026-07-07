@@ -4,6 +4,24 @@ import { sanitize } from "../utility.js";
 import axios from "axios";
 
 const router = Router();
+// Get wallet insights
+router.get('/wallets/:id/insights', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = 'SELECT SUM(amount) as total_income FROM wallet_transactions WHERE wallet_id = ? AND type = "income"';
+    const [income] = await pool.query(query, [id]);
+    
+    const expenseQuery = 'SELECT SUM(amount) as total_expense FROM wallet_transactions WHERE wallet_id = ? AND type = "expense"';
+    const [expense] = await expenseQuery.query(expenseQuery, [id]);
+    
+    res.json({
+      income: income[0]?.total_income || 0,
+      expense: expense[0]?.total_expense || 0
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Get user wallets
 router.get("/:userId", async (req, res) => {
