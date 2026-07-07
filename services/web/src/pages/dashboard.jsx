@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { wallet } from "@/services/wallet";
+import wallet from "@/services/wallet";
 import {
   Dialog,
   DialogContent,
