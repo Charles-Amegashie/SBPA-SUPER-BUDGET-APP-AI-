@@ -1,390 +1,269 @@
-import { Router } from "express";
-import connection from "../db.js";
-import { sanitize } from "../utility.js";
-import axios from "axios";
+import express from 'express';
+import pool from '../db.js';
+import axios from 'axios';
 
-const router = Router();
-// Get wallet insights
+const router = express.Router();
+
+// Get all wallets
+router.get('/wallets', async (req, res) => {
+  try {
+    const [wallets] = await pool.query('SELECT * FROM wallets');
+    res.json(wallets);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create a new wallet
+router.post('/wallets', async (req, res) => {
+  try {
+    const { name, currency } = req.body;
+    const [result] = await pool.query(
+      'INSERT INTO wallets (name, currency, balance) VALUES (?, ?, 0)',
+      [name, currency || 'GHS']
+    );
+    res.json({ id: result.insertId, name, currency, balance: 0 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get wallet by ID
+router.get('/wallets/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [wallets] = await pool.query('SELECT * FROM wallets WHERE id = ?', [id]);
+    if (wallets.length === 0) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+    res.json(wallets[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get wallet insights/stats
 router.get('/wallets/:id/insights', async (req, res) => {
   try {
     const { id } = req.params;
-    const query = 'SELECT SUM(amount) as total_income FROM wallet_transactions WHERE wallet_id = ? AND type = "income"';
-    const [income] = await pool.query(query, [id]);
     
-    const expenseQuery = 'SELECT SUM(amount) as total_expense FROM wallet_transactions WHERE wallet_id = ? AND type = "expense"';
-    const [expense] = await expenseQuery.query(expenseQuery, [id]);
+    // Get total income
+    const [incomeResult] = await pool.query(
+      'SELECT COALESCE(SUM(amount), 0) as total FROM wallet_transactions WHERE wallet_id = ? AND type = "income"',
+      [id]
+    );
+    
+    // Get total expenses
+    const [expenseResult] = await pool.query(
+      'SELECT COALESCE(SUM(amount), 0) as total FROM wallet_transactions WHERE wallet_id = ? AND type = "expense"',
+      [id]
+    );
+    
+    // Get category breakdown
+    const [categoryBreakdown] = await pool.query(
+      'SELECT category, SUM(amount) as total, COUNT(*) as count FROM wallet_transactions WHERE wallet_id = ? AND type = "expense" GROUP BY category',
+      [id]
+    );
+    
+    // Get recent transactions
+    const [recent] = await pool.query(
+      'SELECT * FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC LIMIT 5',
+      [id]
+    );
     
     res.json({
-      income: income[0]?.total_income || 0,
-      expense: expense[0]?.total_expense || 0
+      totalIncome: incomeResult[0].total,
+      totalExpense: expenseResult[0].total,
+      balance: incomeResult[0].total - expenseResult[0].total,
+      categoryBreakdown,
+      recentTransactions: recent
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get user wallets
-router.get("/:userId", async (req, res) => {
-  const { userId } = req.params;
-  const { page = 1, pageSize = 10 } = req.query;
-  if (!userId) res.status(400).json({ message: "User ID is required" });
+// Get transactions for a wallet
+router.get('/wallets/:id/transactions', async (req, res) => {
   try {
-    const [rows] = await connection.query(
-      "SELECT * FROM wallets WHERE user_id = ? LIMIT ? OFFSET ?",
-      [userId, pageSize, (page - 1) * pageSize]
+    const { id } = req.params;
+    const [transactions] = await pool.query(
+      'SELECT * FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC',
+      [id]
     );
-    const [[{ total }]] = await connection.query(
-      "SELECT COUNT(*) as total FROM wallets WHERE user_id = ?",
-      [userId]
-    );
-    const sanitizedData = sanitize({
-      data: rows,
-      page,
-      pageSize,
-      total,
-    });
-    res.json(sanitizedData);
+    res.json(transactions);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Get user transactions
-router.get("/:userId/transactions", async (req, res) => {
-  const { userId } = req.params;
-  const { page = 1, pageSize = 5, orderBy = "DESC" } = req.query;
-  if (!userId) res.status(400).json({ message: "User ID is required" });
+// Add a transaction
+router.post('/transactions', async (req, res) => {
   try {
-    const [rows] = await connection.query(
-      `SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY timestamp ${orderBy} LIMIT ? OFFSET ?`,
-      [userId, pageSize, (page - 1) * pageSize]
-    );
-
-    const [[{ total }]] = await connection.query(
-      "SELECT COUNT(*) as total FROM wallet_transactions WHERE user_id = ?",
-      [userId]
-    );
-    const sanitizedData = sanitize({
-      data: rows,
-      page,
-      pageSize,
-      total,
-    });
-    res.json(sanitizedData);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-// Get user dashboard stats
-router.get("/:userId/stats", async (req, res) => {
-  const { userId } = req.params;
-  if (!userId) return res.status(400).json({ message: "User ID is required" });
-
-  try {
-    // 1. Total Spent
-    const [[{ currentMonthSpent }]] = await connection.query(
-      `SELECT COALESCE(SUM(amount), 0) AS currentMonthSpent
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND type = 'debit'
-         AND MONTH(timestamp) = MONTH(NOW())
-         AND YEAR(timestamp) = YEAR(NOW())`,
-      [userId]
-    );
-
-    const [[{ previousMonthSpent }]] = await connection.query(
-      `SELECT COALESCE(SUM(amount), 0) AS previousMonthSpent
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND type = 'debit'
-         AND MONTH(timestamp) = MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH))
-         AND YEAR(timestamp) = YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH))`,
-      [userId]
-    );
-
-    const totalSpent = {
-      currentMonth: Number(currentMonthSpent),
-      previousMonth: Number(previousMonthSpent),
-      difference: Number((currentMonthSpent - previousMonthSpent).toFixed(2)),
-      percentageChange:
-        previousMonthSpent === 0
-          ? null
-          : Number(
-              (
-                ((currentMonthSpent - previousMonthSpent) /
-                  previousMonthSpent) *
-                100
-              ).toFixed(2)
-            ),
-      trend:
-        currentMonthSpent > previousMonthSpent
-          ? "up"
-          : currentMonthSpent < previousMonthSpent
-          ? "down"
-          : "no_change",
-    };
-
-    // 2. Total Income
-    const [[{ currentMonthIncome }]] = await connection.query(
-      `SELECT COALESCE(SUM(amount), 0) AS currentMonthIncome
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND type = 'credit'
-         AND MONTH(timestamp) = MONTH(NOW())
-         AND YEAR(timestamp) = YEAR(NOW())`,
-      [userId]
-    );
-
-    const [[{ previousMonthIncome }]] = await connection.query(
-      `SELECT COALESCE(SUM(amount), 0) AS previousMonthIncome
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND type = 'credit'
-         AND MONTH(timestamp) = MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH))
-         AND YEAR(timestamp) = YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH))`,
-      [userId]
-    );
-
-    const totalIncome = {
-      currentMonth: Number(currentMonthIncome),
-      previousMonth: Number(previousMonthIncome),
-      difference: Number((currentMonthIncome - previousMonthIncome).toFixed(2)),
-      percentageChange:
-        previousMonthIncome === 0
-          ? null
-          : Number(
-              (
-                ((currentMonthIncome - previousMonthIncome) /
-                  previousMonthIncome) *
-                100
-              ).toFixed(2)
-            ),
-      trend:
-        currentMonthIncome > previousMonthIncome
-          ? "up"
-          : currentMonthIncome < previousMonthIncome
-          ? "down"
-          : "no_change",
-    };
-
-    // 3. Net Savings (current month)
-    const netSavingsCurrent = currentMonthIncome - currentMonthSpent;
-    const netSavingsPrevious = previousMonthIncome - previousMonthSpent;
-    const netSavings = {
-      currentMonth: Number(netSavingsCurrent.toFixed(2)),
-      previousMonth: Number(netSavingsPrevious.toFixed(2)),
-      difference: Number((netSavingsCurrent - netSavingsPrevious).toFixed(2)),
-      percentageChange:
-        netSavingsPrevious === 0
-          ? null
-          : Number(
-              (
-                ((netSavingsCurrent - netSavingsPrevious) /
-                  netSavingsPrevious) *
-                100
-              ).toFixed(2)
-            ),
-      trend:
-        netSavingsCurrent > netSavingsPrevious
-          ? "up"
-          : netSavingsCurrent < netSavingsPrevious
-          ? "down"
-          : "no_change",
-    };
-
-    // 4. Transaction Count
-    const [[{ currentTransactionCount }]] = await connection.query(
-      `SELECT COUNT(*) AS currentTransactionCount
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND MONTH(timestamp) = MONTH(NOW())
-         AND YEAR(timestamp) = YEAR(NOW())`,
-      [userId]
-    );
-
-    const [[{ previousTransactionCount }]] = await connection.query(
-      `SELECT COUNT(*) AS previousTransactionCount
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND MONTH(timestamp) = MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH))
-         AND YEAR(timestamp) = YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH))`,
-      [userId]
-    );
-
-    const transactionCount = {
-      currentMonth: currentTransactionCount,
-      previousMonth: previousTransactionCount,
-      difference: currentTransactionCount - previousTransactionCount,
-      percentageChange:
-        previousTransactionCount === 0
-          ? null
-          : Number(
-              (
-                ((currentTransactionCount - previousTransactionCount) /
-                  previousTransactionCount) *
-                100
-              ).toFixed(2)
-            ),
-      trend:
-        currentTransactionCount > previousTransactionCount
-          ? "up"
-          : currentTransactionCount < previousTransactionCount
-          ? "down"
-          : "no_change",
-    };
-
-    // 5. Top Spending Categories (Top 5)
-    const [currentTopCategories] = await connection.query(
-      `SELECT category, SUM(amount) AS amount
-       FROM wallet_transactions
-       WHERE user_id = ?
-         AND type = 'debit'
-         AND MONTH(timestamp) = MONTH(NOW())
-         AND YEAR(timestamp) = YEAR(NOW())
-       GROUP BY category
-       ORDER BY amount DESC
-       LIMIT 5`,
-      [userId]
-    );
-
-    const topCategories = [];
-
-    for (const row of currentTopCategories) {
-      const category = row.category;
-      const currentAmount = Number(row.amount);
-
-      const [[{ amount: previousAmount = 0 } = {}]] = await connection.query(
-        `SELECT SUM(amount) AS amount
-         FROM wallet_transactions
-         WHERE user_id = ?
-           AND type = 'debit'
-           AND category = ?
-           AND MONTH(timestamp) = MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH))
-           AND YEAR(timestamp) = YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH))`,
-        [userId, category]
-      );
-
-      const difference = currentAmount - previousAmount;
-      const percentageChange =
-        previousAmount === 0
-          ? null
-          : Number(((difference / previousAmount) * 100).toFixed(2));
-      const trend =
-        currentAmount > previousAmount
-          ? "up"
-          : currentAmount < previousAmount
-          ? "down"
-          : "no_change";
-
-      topCategories.push({
-        name: category,
-        currentMonth: Number(currentAmount),
-        previousMonth: Number(previousAmount),
-        difference: Number(difference.toFixed(2)),
-        percentageChange,
-        trend,
-      });
+    const { wallet_id, type, category, amount, description, transaction_date } = req.body;
+    
+    // Validate input
+    if (!wallet_id || !type || !amount) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
-
-    // Return formatted response
-    const data = {
-      totalSpent,
-      totalIncome,
-      netSavings,
-      transactionCount,
-      topCategories,
-    };
-
-    const sanitizedData = sanitize({ data });
-    res.json(sanitizedData);
+    
+    // Insert transaction
+    const [result] = await pool.query(
+      'INSERT INTO wallet_transactions (wallet_id, type, category, amount, description, transaction_date) VALUES (?, ?, ?, ?, ?, ?)',
+      [wallet_id, type, category || 'Other', amount, description || '', transaction_date || new Date()]
+    );
+    
+    // Update wallet balance
+    const [walletData] = await pool.query('SELECT balance FROM wallets WHERE id = ?', [wallet_id]);
+    const currentBalance = walletData[0].balance;
+    const newBalance = type === 'income' ? currentBalance + parseFloat(amount) : currentBalance - parseFloat(amount);
+    
+    await pool.query('UPDATE wallets SET balance = ? WHERE id = ?', [newBalance, wallet_id]);
+    
+    res.json({ 
+      id: result.insertId, 
+      wallet_id, 
+      type, 
+      category, 
+      amount, 
+      description,
+      newBalance 
+    });
   } catch (error) {
-    console.error("Stats error:", error);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Create wallet
-router.post("/:userId", async (req, res) => {
-  const { userId } = req.params;
-  const { provider, source, label, is_active = 1 } = req.body;
-
-  if (!userId || !provider || !source || !label) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
-
+// Get transaction by ID
+router.get('/transactions/:id', async (req, res) => {
   try {
-    const [result] = await connection.query(
-      `INSERT INTO wallets (user_id, provider, source, label, is_active)
-       VALUES (?, ?, ?, ?, ?)`,
-      [userId, provider, source, label, is_active]
-    );
-
-    const [wallet] = await connection.query(
-      `SELECT * FROM wallets WHERE id = ?`,
-      [result.insertId]
-    );
-
-    res.status(201).json(wallet[0]);
-  } catch (err) {
-    console.error("Error creating wallet:", err);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-router.post("/:userId/transactions", async (req, res) => {
-  const { userId } = req.params;
-  const {
-    walletId = 1,
-    source,
-    amount,
-    type,
-    description = "",
-    category = "",
-    timestamp = new Date(),
-  } = req.body;
-
-  if (!walletId || !userId || !source || !amount || !type) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
-
-  try {
-    const [result] = await connection.query(
-      `INSERT INTO wallet_transactions
-       (wallet_id, user_id, source, amount, type, description, category, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [walletId, userId, source, amount, type, description, category, timestamp]
-    );
-
-    const [transaction] = await connection.query(
-      `SELECT * FROM wallet_transactions WHERE id = ?`,
-      [result.insertId]
-    );
-
-    res.status(201).json(transaction[0]);
-  } catch (err) {
-    console.error("Error creating transaction:", err);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-router.get("/:userId/insights", async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const response = await axios.get(
-      `${process.env.PREDICTION_URL}/v1/ai/predict/${userId}/insights`
-    );
-    const insights = response.data;
-
-    const sanitizedData = sanitize({ data: insights });
-
-    res.json(sanitizedData);
+    const { id } = req.params;
+    const [transactions] = await pool.query('SELECT * FROM wallet_transactions WHERE id = ?', [id]);
+    if (transactions.length === 0) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+    res.json(transactions[0]);
   } catch (error) {
-    console.error("AI insights error:", error.message);
-    res.status(500).json({ message: "Failed to fetch AI insights" });
+    res.status(500).json({ error: error.message });
   }
+});
+
+// Update transaction
+router.put('/transactions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, category, amount, description } = req.body;
+    
+    // Get old transaction to adjust balance
+    const [oldTransaction] = await pool.query('SELECT * FROM wallet_transactions WHERE id = ?', [id]);
+    if (oldTransaction.length === 0) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+    
+    const oldAmount = oldTransaction[0].amount;
+    const oldType = oldTransaction[0].type;
+    const wallet_id = oldTransaction[0].wallet_id;
+    
+    // Update transaction
+    await pool.query(
+      'UPDATE wallet_transactions SET type = ?, category = ?, amount = ?, description = ? WHERE id = ?',
+      [type, category, amount, description, id]
+    );
+    
+    // Adjust wallet balance
+    const [walletData] = await pool.query('SELECT balance FROM wallets WHERE id = ?', [wallet_id]);
+    let newBalance = walletData[0].balance;
+    
+    // Reverse old transaction
+    newBalance = oldType === 'income' ? newBalance - oldAmount : newBalance + oldAmount;
+    // Apply new transaction
+    newBalance = type === 'income' ? newBalance + parseFloat(amount) : newBalance - parseFloat(amount);
+    
+    await pool.query('UPDATE wallets SET balance = ? WHERE id = ?', [newBalance, wallet_id]);
+    
+    res.json({ id, type, category, amount, description, newBalance });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete transaction
+router.delete('/transactions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const [transaction] = await pool.query('SELECT * FROM wallet_transactions WHERE id = ?', [id]);
+    if (transaction.length === 0) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+    
+    const { wallet_id, type, amount } = transaction[0];
+    
+    // Delete transaction
+    await pool.query('DELETE FROM wallet_transactions WHERE id = ?', [id]);
+    
+    // Adjust wallet balance
+    const [walletData] = await pool.query('SELECT balance FROM wallets WHERE id = ?', [wallet_id]);
+    const newBalance = type === 'income' ? walletData[0].balance - amount : walletData[0].balance + amount;
+    await pool.query('UPDATE wallets SET balance = ? WHERE id = ?', [newBalance, wallet_id]);
+    
+    res.json({ message: 'Transaction deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Chat endpoint
+router.post('/chat', async (req, res) => {
+  try {
+    const { wallet_id, message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    
+    // Get wallet transactions for context
+    const [transactions] = await pool.query(
+      'SELECT * FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC LIMIT 10',
+      [wallet_id]
+    );
+    
+    const [walletData] = await pool.query('SELECT * FROM wallets WHERE id = ?', [wallet_id]);
+    
+    // Build context for AI
+    const walletContext = walletData[0] ? `Wallet: ${walletData[0].name}, Balance: ${walletData[0].balance}` : '';
+    const transactionContext = transactions.map(t => `${t.type}: ${t.amount} (${t.category})`).join(', ');
+    
+    const systemPrompt = `You are a helpful financial advisor. The user has a budget tracking app. ${walletContext}. Recent transactions: ${transactionContext}. Provide helpful financial advice based on their spending patterns.`;
+    
+    // Call prediction service for AI response
+    try {
+      const response = await axios.post(
+        process.env.PREDICTION_URL + '/chat',
+        { message, system_prompt: systemPrompt },
+        { timeout: 10000 }
+      );
+      
+      const botResponse = response.data.response || 'I could not process your request.';
+      
+      // Save chat message
+      await pool.query(
+        'INSERT INTO chat_messages (wallet_id, user_message, bot_response) VALUES (?, ?, ?)',
+        [wallet_id, message, botResponse]
+      );
+      
+      res.json({ userMessage: message, botResponse });
+    } catch (error) {
+      res.status(500).json({ error: 'Chat service unavailable: ' + error.message });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Health check
+router.get('/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date() });
 });
 
 export default router;
