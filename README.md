@@ -2,7 +2,7 @@
 
 A full-stack AI-powered personal finance management platform that predicts spending patterns, provides smart financial insights, and simplifies budget tracking with an intuitive interface.
 
-**[Live Demo](https://your-railway-url.railway.app)** | **[GitHub](https://github.com/Charles-Amegashie/SBPA-SUPER-BUDGET-APP-AI-)**
+**[Live Demo](https://powerful-contentment-production-2e84.up.railway.app/)** | **[GitHub](https://github.com/Charles-Amegashie/SBPA-SUPER-BUDGET-APP-AI-)**
 
 ---
 
@@ -296,7 +296,7 @@ This project is licensed under the MIT License - see LICENSE file for details.
 
 **Charles Amegashie** - Full-Stack Developer
 - [GitHub](https://github.com/Charles-Amegashie)
-- [LinkedIn](https://linkedin.com/in/charles-amegashie)
+- [LinkedIn](https://www.linkedin.com/in/charlesamegashie)
 
 ---
 
